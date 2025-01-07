@@ -1,0 +1,153 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: php-app
+  labels:
+    name: php-app
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: db-config
+  namespace: php-app
+data:
+  DB_SERVER: database-1.cvsyzem2dlko.us-west-2.rds.amazonaws.com
+  DB_USERNAME: admin
+  DB_PASSWORD: wisukyERTjEtQAcoJaGW
+  DB_DATABASE: sample
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: php-app-deploy
+  namespace: php-app
+  labels:
+    app: php-app
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: php-app
+  template:
+    metadata:
+      labels:
+        app: php-app
+    spec:
+      containers:
+      - name: php-app
+        image: public.ecr.aws/r0r0f0e4/php-app:v1.0
+        ports:
+        - containerPort: 9000
+          name: fastcgi
+        env: 
+        - name: DB_SERVER
+          valueFrom:
+            configMapKeyRef:
+              name: db-config
+              key: DB_SERVER
+        - name: DB_USERNAME
+          valueFrom:
+            configMapKeyRef:
+              name: db-config
+              key: DB_USERNAME
+        - name: DB_PASSWORD
+          valueFrom:
+            configMapKeyRef:
+              name: db-config
+              key: DB_PASSWORD
+        - name: DB_DATABASE
+          valueFrom:
+            configMapKeyRef:
+              name: db-config
+              key: DB_DATABASE
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: php-app-service
+  namespace: php-app
+spec:
+  selector:
+    app: php-app
+  ports:
+  - port: 9000
+    targetPort: 9000
+    name: fastcgi
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-config
+  namespace: php-app
+data:
+  default.conf: |
+    server {
+        listen 80;
+        server_name *.amazonaws.com;
+
+        location / {
+            root            /usr/share/nginx/html;        
+            index           index.html index.htm;
+        }
+
+        location ~ \.php$ {
+            root            /app;  
+            fastcgi_pass    php-app-service:9000;
+            fastcgi_index   index.php;
+            fastcgi_param   SCRIPT_FILENAME $document_root$fastcgi_script_name;       
+            include         fastcgi_params;   
+        }
+    }
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+  namespace: php-app
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:latest
+        ports:
+        - containerPort: 80
+        volumeMounts:
+        - name: nginx-config
+          mountPath: /etc/nginx/conf.d
+      volumes:
+      - name: nginx-config
+        configMap:
+          name: nginx-config
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-service
+  namespace: php-app
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+spec:
+  selector:
+    app: nginx
+  ports:
+    - port: 80
+      targetPort: 80
+      protocol: TCP
+  type: LoadBalancer
+  # Specify the new load balancer class for NLB as part of EKS Auto Mode feature
+  # For clusters with Auto Mode enabled, this field can be omitted as it's the default
+  loadBalancerClass: eks.amazonaws.com/nlb
